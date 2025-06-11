@@ -19,15 +19,11 @@ export async function OPTIONS() {
 }
 
 interface RequestBody {
-  content?: string; // Keep content for UI compatibility, but we'll prioritize URL
+  content?: string;
   url?: string;
 }
 
 export async function POST(req: Request) {
-  if (req.method === 'OPTIONS') {
-    return new NextResponse(null, { status: 200, headers: corsHeaders });
-  }
-  
   const startTime = Date.now();
   
   try {
@@ -48,8 +44,6 @@ export async function POST(req: Request) {
     }
     
     const prompt = "For the article at the following URL, please provide a list of at least 7 articles that present opposing viewpoints. For each article, give me the title and the direct URL. Please format the entire response as a single, clean JSON array of objects, where each object has a 'title' and 'url' key. Do not include any other text or explanation before or after the JSON array.";
-
-    console.log(`Processing Perplexity request for opposing views on URL: ${url}`);
 
     const response = await fetch(PERPLEXITY_API_URL, {
       method: 'POST',
@@ -75,15 +69,24 @@ export async function POST(req: Request) {
     }
 
     const data = await response.json();
-    const result = data.choices[0].message.content;
+    const rawResult = data.choices[0].message.content;
     
-    const processingTime = Date.now() - startTime;
-    console.log(`Perplexity opposing views request completed in ${processingTime}ms`);
-
+    // --- UPDATED LINE ---
+    // Replaced the 's' flag with [\s\S] to ensure compatibility with all TS/JS versions.
+    // This finds the first valid JSON array or object in the AI's response string.
+    const jsonMatch = rawResult.match(/(\[[\s\S]*\]|\{[\s\S]*\})/);
+    
+    if (!jsonMatch) {
+      console.error("No valid JSON found in the AI response:", rawResult);
+      throw new Error("The analysis service returned data in an unexpected format.");
+    }
+    
+    const cleanedJsonString = jsonMatch[0];
+    
     return new NextResponse(JSON.stringify({
       success: true,
-      result: result,
-      processingTime: processingTime
+      result: cleanedJsonString,
+      processingTime: Date.now() - startTime
     }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' }});
 
   } catch (error) {
