@@ -19,7 +19,7 @@ export async function OPTIONS() {
 }
 
 interface RequestBody {
-  content?: string;
+  content?: string; // Kept for compatibility with the frontend message structure
   url?: string;
 }
 
@@ -27,6 +27,7 @@ export async function POST(req: Request) {
   const startTime = Date.now();
   
   try {
+    // The frontend sends the URL in the 'content' property. We alias it to 'url' here for clarity.
     const { content: url }: RequestBody = await req.json();
 
     if (!url || !url.trim()) {
@@ -71,9 +72,8 @@ export async function POST(req: Request) {
     const data = await response.json();
     const rawResult = data.choices[0].message.content;
     
-    // --- UPDATED LINE ---
-    // Replaced the 's' flag with [\s\S] to ensure compatibility with all TS/JS versions.
-    // This finds the first valid JSON array or object in the AI's response string.
+    // Step 1: Extract the JSON block from a potential markdown wrapper.
+    // Uses [\s\S] to be compatible with all TypeScript/JavaScript versions.
     const jsonMatch = rawResult.match(/(\[[\s\S]*\]|\{[\s\S]*\})/);
     
     if (!jsonMatch) {
@@ -81,7 +81,10 @@ export async function POST(req: Request) {
       throw new Error("The analysis service returned data in an unexpected format.");
     }
     
-    const cleanedJsonString = jsonMatch[0];
+    let cleanedJsonString = jsonMatch[0];
+
+    // Step 2: Remove any JavaScript-style comments (//...) that the AI might have added.
+    cleanedJsonString = cleanedJsonString.replace(/\/\/.*/g, '');
     
     return new NextResponse(JSON.stringify({
       success: true,
