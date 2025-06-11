@@ -4,11 +4,8 @@ export const config = {
   runtime: 'edge',
 }
 
-const CLAUDE_API_KEY = process.env.CLAUDE_API_KEY;
-const TAVILY_API_KEY = process.env.TAVILY_API_KEY;
-
-const CLAUDE_API_URL = 'https://api.anthropic.com/v1/messages';
-const TAVILY_API_URL = 'https://api.tavily.com/search';
+const PERPLEXITY_API_KEY = process.env.PERPLEXITY_API_KEY;
+const PERPLEXITY_API_URL = 'https://api.perplexity.ai/chat/completions';
 
 const corsHeaders = {
     'Access-Control-Allow-Origin': '*',
@@ -17,98 +14,85 @@ const corsHeaders = {
     'Access-Control-Max-Age': '86400',
 };
 
-// The 'req' parameter has been removed as it was unused.
 export async function OPTIONS() {
-    return new NextResponse(null, {
-        status: 200,
-        headers: corsHeaders,
-    });
+    return new NextResponse(null, { status: 200, headers: corsHeaders });
 }
 
 interface RequestBody {
-  content?: string;
-  title?: string;
+  content?: string; // Keep content for UI compatibility, but we'll prioritize URL
+  url?: string;
 }
 
-// --- Helper Functions ---
-async function getTopicFromContent(content: string): Promise<string> {
-    const response = await fetch(CLAUDE_API_URL, {
-        method: 'POST',
-        headers: { 'x-api-key': CLAUDE_API_KEY!, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
-        body: JSON.stringify({
-            model: 'claude-3-haiku-20240307',
-            max_tokens: 50,
-            messages: [{ role: 'user', content: `Identify the main topic of the following article text in a short, neutral phrase of 5-10 words. Example: "US inflation and interest rate policy".\n\nARTICLE:\n${content}` }],
-        }),
-    });
-    if (!response.ok) throw new Error('Failed to get topic from Claude');
-    const data = await response.json();
-    return data.content[0].text;
-}
-
-async function searchWithTavily(query: string) {
-    const response = await fetch(TAVILY_API_URL, {
-        method: 'POST',
-        headers: { 'Authorization': `Bearer ${TAVILY_API_KEY!}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-            api_key: TAVILY_API_KEY!,
-            query: query,
-            search_depth: "basic",
-            max_results: 1,
-        }),
-    });
-    if (!response.ok) throw new Error(`Tavily search failed for query: ${query}`);
-    const data = await response.json();
-    if (data.results && data.results.length > 0) {
-        return {
-            title: data.results[0].title,
-            url: data.results[0].url,
-            source_name: new URL(data.results[0].url).hostname,
-            summary: data.results[0].content,
-        };
-    }
-    return { title: "No article found", url: "#", source_name: "N/A", summary: "Could not find a relevant article for this perspective." };
-}
-
-// --- Main API Route ---
 export async function POST(req: Request) {
-  if (!CLAUDE_API_KEY || !TAVILY_API_KEY) {
-    return new NextResponse(JSON.stringify({ success: false, error: 'API keys for Claude or Tavily are not configured on the server.' }), {
-      status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-    });
+  if (req.method === 'OPTIONS') {
+    return new NextResponse(null, { status: 200, headers: corsHeaders });
   }
-
+  
+  const startTime = Date.now();
+  
   try {
-    const { content }: RequestBody = await req.json();
-    if (!content || content.trim() === '') {
-      return new NextResponse(JSON.stringify({ success: false, error: 'Content is required' }), {
-        status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+    const { content: url }: RequestBody = await req.json();
+
+    if (!url || !url.trim()) {
+      return new NextResponse(JSON.stringify({ success: false, error: 'URL (sent as content) is required' }), {
+        status: 400,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
       });
     }
 
-    const truncatedContent = content.substring(0, 2000);
-    const topic = await getTopicFromContent(truncatedContent);
+    if (!PERPLEXITY_API_KEY) {
+      return new NextResponse(JSON.stringify({ success: false, error: 'PERPLEXITY_API_KEY not configured' }), {
+        status: 500,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+      });
+    }
+    
+    const prompt = "For the article at the following URL, please provide a list of at least 7 articles that present opposing viewpoints. For each article, give me the title and the direct URL. Please format the entire response as a single, clean JSON array of objects, where each object has a 'title' and 'url' key. Do not include any other text or explanation before or after the JSON array.";
 
-    const [leftPerspective, rightPerspective] = await Promise.all([
-        searchWithTavily(`progressive or left-leaning criticism of "${topic}"`),
-        searchWithTavily(`conservative or right-leaning support for "${topic}"`)
-    ]);
+    console.log(`Processing Perplexity request for opposing views on URL: ${url}`);
+
+    const response = await fetch(PERPLEXITY_API_URL, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${PERPLEXITY_API_KEY}`,
+        'accept': 'application/json',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: "llama-3.1-sonar-small-128k-online",
+        messages: [
+            { role: "system", content: "You are an AI assistant that returns data in a structured JSON format." },
+            { role: "user", content: `${prompt}\n\nURL: ${url}` }
+        ],
+        temperature: 0.1
+      }),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('Perplexity API error:', errorText);
+      throw new Error(`Perplexity API failed with status ${response.status}: ${errorText}`);
+    }
+
+    const data = await response.json();
+    const result = data.choices[0].message.content;
+    
+    const processingTime = Date.now() - startTime;
+    console.log(`Perplexity opposing views request completed in ${processingTime}ms`);
 
     return new NextResponse(JSON.stringify({
       success: true,
-      pivot: {
-        left_perspective: leftPerspective,
-        right_perspective: rightPerspective
-      },
-    }), {
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-    });
+      result: result,
+      processingTime: processingTime
+    }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' }});
 
   } catch (error) {
-    console.error('Pivot endpoint error:', error);
+    console.error('Pivot (Perplexity) endpoint error:', error);
     const errorMessage = error instanceof Error ? error.message : 'An unexpected error occurred';
-    return new NextResponse(JSON.stringify({ success: false, error: errorMessage }), {
-      status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-    });
+    return new NextResponse(JSON.stringify({
+      success: false,
+      error: errorMessage,
+      processingTime: Date.now() - startTime
+    }), { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' }});
   }
 }
