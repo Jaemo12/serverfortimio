@@ -4,7 +4,6 @@ export const config = {
   runtime: 'edge',
 }
 
-// Get all keys from environment variables
 const CLAUDE_API_KEY = process.env.CLAUDE_API_KEY;
 const TAVILY_API_KEY = process.env.TAVILY_API_KEY;
 
@@ -18,8 +17,12 @@ const corsHeaders = {
     'Access-Control-Max-Age': '86400',
 };
 
-export async function OPTIONS(req: Request) {
-    return new NextResponse(null, { status: 200, headers: corsHeaders });
+// The 'req' parameter has been removed as it was unused.
+export async function OPTIONS() {
+    return new NextResponse(null, {
+        status: 200,
+        headers: corsHeaders,
+    });
 }
 
 interface RequestBody {
@@ -28,8 +31,6 @@ interface RequestBody {
 }
 
 // --- Helper Functions ---
-
-// 1. Get the core topic using Claude Haiku (fast and cheap)
 async function getTopicFromContent(content: string): Promise<string> {
     const response = await fetch(CLAUDE_API_URL, {
         method: 'POST',
@@ -45,7 +46,6 @@ async function getTopicFromContent(content: string): Promise<string> {
     return data.content[0].text;
 }
 
-// 2. Search for an article with a specific bias using Tavily
 async function searchWithTavily(query: string) {
     const response = await fetch(TAVILY_API_URL, {
         method: 'POST',
@@ -54,12 +54,11 @@ async function searchWithTavily(query: string) {
             api_key: TAVILY_API_KEY!,
             query: query,
             search_depth: "basic",
-            max_results: 1, // We only need the top result
+            max_results: 1,
         }),
     });
     if (!response.ok) throw new Error(`Tavily search failed for query: ${query}`);
     const data = await response.json();
-    // Return a structured object, defaulting if no results are found
     if (data.results && data.results.length > 0) {
         return {
             title: data.results[0].title,
@@ -71,9 +70,7 @@ async function searchWithTavily(query: string) {
     return { title: "No article found", url: "#", source_name: "N/A", summary: "Could not find a relevant article for this perspective." };
 }
 
-
 // --- Main API Route ---
-
 export async function POST(req: Request) {
   if (!CLAUDE_API_KEY || !TAVILY_API_KEY) {
     return new NextResponse(JSON.stringify({ success: false, error: 'API keys for Claude or Tavily are not configured on the server.' }), {
@@ -90,17 +87,13 @@ export async function POST(req: Request) {
     }
 
     const truncatedContent = content.substring(0, 2000);
-
-    // Step 1: Get the core topic from the article
     const topic = await getTopicFromContent(truncatedContent);
 
-    // Step 2: Perform two parallel, biased searches with Tavily
     const [leftPerspective, rightPerspective] = await Promise.all([
         searchWithTavily(`progressive or left-leaning criticism of "${topic}"`),
         searchWithTavily(`conservative or right-leaning support for "${topic}"`)
     ]);
 
-    // Step 3: Return the combined results
     return new NextResponse(JSON.stringify({
       success: true,
       pivot: {
