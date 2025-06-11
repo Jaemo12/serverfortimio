@@ -4,7 +4,8 @@ import { useState } from 'react';
 
 // A simple component to render the markdown-like response
 const ResultDisplay = ({ content }: { content: string }) => {
-  const sections = content.split('**').filter(Boolean); // Split by ** and remove empty strings
+  // Split by markdown bold syntax and filter out empty strings
+  const sections = content.split('**').filter(Boolean); 
   return (
     <div className="space-y-4">
       {sections.map((section, index) => {
@@ -49,8 +50,13 @@ export default function HomePage() {
       }
 
       setResult(data.result);
-    } catch (err: any) {
-      setError(err.message);
+    } catch (err) {
+      // This block is now type-safe
+      if (err instanceof Error) {
+        setError(err.message);
+      } else {
+        setError('An unexpected string or object was thrown.');
+      }
     } finally {
       setIsLoading(false);
     }
@@ -96,7 +102,6 @@ export default function HomePage() {
         {result && (
           <div className="mt-6 p-6 bg-gray-800/80 border border-gray-700 rounded-lg">
             <h2 className="text-2xl font-bold mb-4">Result</h2>
-            {/* Simple check to see if we should use special formatting for insights */}
             {result.includes('**') ? <ResultDisplay content={result} /> : <div className="whitespace-pre-wrap">{result}</div>}
           </div>
         )}
