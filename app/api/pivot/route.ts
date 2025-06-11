@@ -14,7 +14,7 @@ const corsHeaders = {
     'Access-Control-Max-Age': '86400',
 };
 
-export async function OPTIONS(req: Request) {
+export async function OPTIONS() {
     return new NextResponse(null, {
         status: 200,
         headers: corsHeaders,
