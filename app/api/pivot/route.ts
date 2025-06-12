@@ -41,7 +41,7 @@ export async function POST(req: Request) {
         throw new Error('An API key for Perplexity or Claude is not configured on the server.');
     }
     
-    // --- STEP 1: Perform a search for plain text using Perplexity's powerful online model ---
+    // --- STEP 1: Using the model name you provided ---
     const searchPrompt = `Please find 3-4 articles with opposing viewpoints to the article at this URL: ${url}. For each one, just list the title and the full URL on a new line.`;
     
     const searchResponse = await fetch(PERPLEXITY_API_URL, {
@@ -52,18 +52,19 @@ export async function POST(req: Request) {
         'content-type': 'application/json' 
       },
       body: JSON.stringify({
-        model: "llama-3.1-sonar-large-32k-online", // Using the more powerful search model
+        model: "sonar-reasoning-pro", // Using the model name you requested
         messages: [{ role: "user", content: searchPrompt }],
       }),
     });
 
     if (!searchResponse.ok) {
-      throw new Error(`Search step (Perplexity) failed with status ${searchResponse.status}`);
+        const errorText = await searchResponse.text();
+        throw new Error(`Search step (Perplexity) failed with status ${searchResponse.status}: ${errorText}`);
     }
     const searchData = await searchResponse.json();
     const plainTextListOfArticles = searchData.choices[0].message.content;
 
-    // --- STEP 2: Take the plain text and ask Claude Haiku to format it as JSON ---
+    // --- STEP 2: Formatting the response with Claude ---
     const formatPrompt = `You are a data formatting expert. Your only job is to extract information from the provided text and convert it into a perfect, clean JSON array. Each object in the array must have two keys: "title" (a string) and "url" (a string).
 
 EXAMPLE:
@@ -92,7 +93,7 @@ ${plainTextListOfArticles}`;
             'content-type': 'application/json'
         },
         body: JSON.stringify({
-            model: "claude-3-haiku-20240307", // Using the fast and reliable Haiku model for formatting
+            model: "claude-3-haiku-20240307",
             max_tokens: 2048,
             messages: [{ role: "user", content: formatPrompt }],
             temperature: 0.0,
@@ -100,12 +101,12 @@ ${plainTextListOfArticles}`;
     });
     
     if (!formatResponse.ok) {
-      throw new Error(`Formatting step (Claude) failed with status ${formatResponse.status}`);
+        const errorText = await formatResponse.text();
+        throw new Error(`Formatting step (Claude) failed with status ${formatResponse.status}: ${errorText}`);
     }
     const formatData = await formatResponse.json();
     const rawJsonResult = formatData.content[0].text;
     
-    // Final cleaning step to ensure valid JSON, though Claude is very reliable.
     const jsonMatch = rawJsonResult.match(/(\[[\s\S]*\]|\{[\s\S]*\})/);
     if (!jsonMatch) {
       throw new Error("The formatting AI returned data in an unexpected format.");
