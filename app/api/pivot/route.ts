@@ -19,7 +19,7 @@ export async function OPTIONS() {
 }
 
 interface RequestBody {
-  content?: string; // Kept for compatibility with the frontend message structure
+  content?: string;
   url?: string;
 }
 
@@ -27,7 +27,6 @@ export async function POST(req: Request) {
   const startTime = Date.now();
   
   try {
-    // The frontend sends the URL in the 'content' property. We alias it to 'url' here for clarity.
     const { content: url }: RequestBody = await req.json();
 
     if (!url || !url.trim()) {
@@ -73,7 +72,6 @@ export async function POST(req: Request) {
     const rawResult = data.choices[0].message.content;
     
     // Step 1: Extract the JSON block from a potential markdown wrapper.
-    // Uses [\s\S] to be compatible with all TypeScript/JavaScript versions.
     const jsonMatch = rawResult.match(/(\[[\s\S]*\]|\{[\s\S]*\})/);
     
     if (!jsonMatch) {
@@ -83,12 +81,18 @@ export async function POST(req: Request) {
     
     let cleanedJsonString = jsonMatch[0];
 
-    // Step 2: Remove any JavaScript-style comments (//...) that the AI might have added.
+    // Step 2: Remove any JavaScript-style comments (//...)
     cleanedJsonString = cleanedJsonString.replace(/\/\/.*/g, '');
+
+    // --- THIS IS THE NEW FINAL FIX ---
+    // Step 3: Remove any unescaped control characters (like newlines) from within the string data.
+    // This regex targets ASCII control characters 0-31.
+    const finalJsonString = cleanedJsonString.replace(/[\u0000-\u001F]/g, '');
+    // --- END OF FIX ---
     
     return new NextResponse(JSON.stringify({
       success: true,
-      result: cleanedJsonString,
+      result: finalJsonString, // We now send the final, super-clean string
       processingTime: Date.now() - startTime
     }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' }});
 
