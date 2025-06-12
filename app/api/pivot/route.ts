@@ -4,8 +4,12 @@ export const config = {
   runtime: 'edge',
 }
 
+// Access all necessary API keys from environment variables
 const PERPLEXITY_API_KEY = process.env.PERPLEXITY_API_KEY;
+const CLAUDE_API_KEY = process.env.CLAUDE_API_KEY;
+
 const PERPLEXITY_API_URL = 'https://api.perplexity.ai/chat/completions';
+const CLAUDE_API_URL = 'https://api.anthropic.com/v1/messages';
 
 const corsHeaders = {
     'Access-Control-Allow-Origin': '*',
@@ -30,61 +34,85 @@ export async function POST(req: Request) {
     const { content: url }: RequestBody = await req.json();
 
     if (!url || !url.trim()) {
-      return new NextResponse(JSON.stringify({ success: false, error: 'URL (sent as content) is required' }), {
-        status: 400,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-      });
+      throw new Error('URL (sent as content) is required');
     }
 
-    if (!PERPLEXITY_API_KEY) {
-      return new NextResponse(JSON.stringify({ success: false, error: 'PERPLEXITY_API_KEY not configured' }), {
-        status: 500,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-      });
+    if (!PERPLEXITY_API_KEY || !CLAUDE_API_KEY) {
+        throw new Error('An API key for Perplexity or Claude is not configured on the server.');
     }
     
-    const prompt = "For the article at the following URL, please provide a list of at least 3 articles that present opposing viewpoints. For each article, give me the title and the direct URL. Please format the entire response as a single, clean JSON array of objects, where each object has a 'title' and 'url' key. Do not include any other text or explanation before or after the JSON array.";
-
-    const response = await fetch(PERPLEXITY_API_URL, {
+    // --- STEP 1: Perform a search for plain text using Perplexity's powerful online model ---
+    const searchPrompt = `Please find 3-4 articles with opposing viewpoints to the article at this URL: ${url}. For each one, just list the title and the full URL on a new line.`;
+    
+    const searchResponse = await fetch(PERPLEXITY_API_URL, {
       method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${PERPLEXITY_API_KEY}`,
-        'accept': 'application/json',
-        'content-type': 'application/json',
+      headers: { 
+        'Authorization': `Bearer ${PERPLEXITY_API_KEY}`, 
+        'accept': 'application/json', 
+        'content-type': 'application/json' 
       },
       body: JSON.stringify({
-        model: "llama-3.1-sonar-small-128k-online",
-        messages: [
-            { role: "system", content: "You are an AI assistant that returns data in a structured JSON format." },
-            { role: "user", content: `${prompt}\n\nURL: ${url}` }
-        ],
-        temperature: 0.1,
-        // --- THIS IS THE FIX ---
-        // Give the AI a larger limit for its response.
-        max_tokens: 4096
+        model: "llama-3.1-sonar-large-32k-online", // Using the more powerful search model
+        messages: [{ role: "user", content: searchPrompt }],
       }),
     });
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error('Perplexity API error:', errorText);
-      throw new Error(`Perplexity API failed with status ${response.status}: ${errorText}`);
+    if (!searchResponse.ok) {
+      throw new Error(`Search step (Perplexity) failed with status ${searchResponse.status}`);
     }
+    const searchData = await searchResponse.json();
+    const plainTextListOfArticles = searchData.choices[0].message.content;
 
-    const data = await response.json();
-    const rawResult = data.choices[0].message.content;
+    // --- STEP 2: Take the plain text and ask Claude Haiku to format it as JSON ---
+    const formatPrompt = `You are a data formatting expert. Your only job is to extract information from the provided text and convert it into a perfect, clean JSON array. Each object in the array must have two keys: "title" (a string) and "url" (a string).
+
+EXAMPLE:
+INPUT TEXT:
+Some Title 1
+https://www.example.com/article1
+Another Title 2
+https://www.example.com/article2
+
+DESIRED JSON OUTPUT:
+[
+  {"title": "Some Title 1", "url": "https://www.example.com/article1"},
+  {"title": "Another Title 2", "url": "https://www.example.com/article2"}
+]
+
+Now, perform this exact task on the following text. Do not add any commentary or explanation. Only output the JSON.
+
+REAL TEXT:
+${plainTextListOfArticles}`;
+
+    const formatResponse = await fetch(CLAUDE_API_URL, {
+        method: 'POST',
+        headers: {
+            'x-api-key': CLAUDE_API_KEY,
+            'anthropic-version': '2023-06-01',
+            'content-type': 'application/json'
+        },
+        body: JSON.stringify({
+            model: "claude-3-haiku-20240307", // Using the fast and reliable Haiku model for formatting
+            max_tokens: 2048,
+            messages: [{ role: "user", content: formatPrompt }],
+            temperature: 0.0,
+        }),
+    });
     
-    const jsonMatch = rawResult.match(/(\[[\s\S]*\]|\{[\s\S]*\})/);
+    if (!formatResponse.ok) {
+      throw new Error(`Formatting step (Claude) failed with status ${formatResponse.status}`);
+    }
+    const formatData = await formatResponse.json();
+    const rawJsonResult = formatData.content[0].text;
     
+    // Final cleaning step to ensure valid JSON, though Claude is very reliable.
+    const jsonMatch = rawJsonResult.match(/(\[[\s\S]*\]|\{[\s\S]*\})/);
     if (!jsonMatch) {
-      console.error("No valid JSON found in the AI response:", rawResult);
-      throw new Error("The analysis service returned data in an unexpected format.");
+      throw new Error("The formatting AI returned data in an unexpected format.");
     }
     
-    let cleanedJsonString = jsonMatch[0];
-    cleanedJsonString = cleanedJsonString.replace(/\/\/.*/g, '');
-    const finalJsonString = cleanedJsonString.replace(/[\u0000-\u001F]/g, '');
-    
+    const finalJsonString = jsonMatch[0];
+
     return new NextResponse(JSON.stringify({
       success: true,
       result: finalJsonString,
@@ -92,7 +120,7 @@ export async function POST(req: Request) {
     }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' }});
 
   } catch (error) {
-    console.error('Pivot (Perplexity) endpoint error:', error);
+    console.error('Pivot endpoint error:', error);
     const errorMessage = error instanceof Error ? error.message : 'An unexpected error occurred';
     return new NextResponse(JSON.stringify({
       success: false,
