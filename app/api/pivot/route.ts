@@ -52,7 +52,7 @@ export async function POST(req: Request) {
         'content-type': 'application/json' 
       },
       body: JSON.stringify({
-        model: "sonar-reasoning-pro", // Using the model name you requested
+        model: "llama-3.1-sonar-small-32k-online", // Using the model name you requested
         messages: [{ role: "user", content: searchPrompt }],
       }),
     });
