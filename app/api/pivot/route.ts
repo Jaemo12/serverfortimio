@@ -43,7 +43,7 @@ export async function POST(req: Request) {
       });
     }
     
-    const prompt = "For the article at the following URL, please provide a list of at least 7 articles that present opposing viewpoints. For each article, give me the title and the direct URL. Please format the entire response as a single, clean JSON array of objects, where each object has a 'title' and 'url' key. Do not include any other text or explanation before or after the JSON array.";
+    const prompt = "For the article at the following URL, please provide a list of at least 3 articles that present opposing viewpoints. For each article, give me the title and the direct URL. Please format the entire response as a single, clean JSON array of objects, where each object has a 'title' and 'url' key. Do not include any other text or explanation before or after the JSON array.";
 
     const response = await fetch(PERPLEXITY_API_URL, {
       method: 'POST',
