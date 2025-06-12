@@ -58,7 +58,10 @@ export async function POST(req: Request) {
             { role: "system", content: "You are an AI assistant that returns data in a structured JSON format." },
             { role: "user", content: `${prompt}\n\nURL: ${url}` }
         ],
-        temperature: 0.1
+        temperature: 0.1,
+        // --- THIS IS THE FIX ---
+        // Give the AI a larger limit for its response.
+        max_tokens: 4096
       }),
     });
 
@@ -71,7 +74,6 @@ export async function POST(req: Request) {
     const data = await response.json();
     const rawResult = data.choices[0].message.content;
     
-    // Step 1: Extract the JSON block from a potential markdown wrapper.
     const jsonMatch = rawResult.match(/(\[[\s\S]*\]|\{[\s\S]*\})/);
     
     if (!jsonMatch) {
@@ -80,19 +82,12 @@ export async function POST(req: Request) {
     }
     
     let cleanedJsonString = jsonMatch[0];
-
-    // Step 2: Remove any JavaScript-style comments (//...)
     cleanedJsonString = cleanedJsonString.replace(/\/\/.*/g, '');
-
-    // --- THIS IS THE NEW FINAL FIX ---
-    // Step 3: Remove any unescaped control characters (like newlines) from within the string data.
-    // This regex targets ASCII control characters 0-31.
     const finalJsonString = cleanedJsonString.replace(/[\u0000-\u001F]/g, '');
-    // --- END OF FIX ---
     
     return new NextResponse(JSON.stringify({
       success: true,
-      result: finalJsonString, // We now send the final, super-clean string
+      result: finalJsonString,
       processingTime: Date.now() - startTime
     }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' }});
 
