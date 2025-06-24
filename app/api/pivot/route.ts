@@ -84,6 +84,7 @@ Provide the output as a JSON object with the following keys: "core_subject" (str
             parsedAnalysisData = JSON.parse(rawJsonResult);
         } catch (parseError) {
             console.error("Failed to parse Claude's raw JSON output:", rawJsonResult, parseError);
+            // Use 'parseError' for logging, but don't define 'e' if it's not used elsewhere.
             throw new Error("Claude returned unparseable JSON for analysis. Raw response: " + rawJsonResult.substring(0, 200));
         }
 
@@ -101,16 +102,17 @@ Provide the output as a JSON object with the following keys: "core_subject" (str
 
         // --- STEP 2: Use Tavily AI to search for opposing viewpoints ---
         const originalDomain = new URL(originalArticleUrl).hostname.replace('www.', '');
-        
+
         // Create search queries for Tavily
-        let searchQueries = [];
-        
+        // CHANGE 1: Changed 'let' to 'const' for 'searchQueries' as it's not reassigned.
+        const searchQueries = [];
+
         // Primary search with opposing terms
         if (opposingKeywords && opposingKeywords.length > 0) {
             searchQueries.push(`${mainTopic} ${opposingKeywords.slice(0, 2).join(' ')}`);
             searchQueries.push(`${mainTopic} criticism debate controversy`);
         }
-        
+
         // Alternative perspective search
         searchQueries.push(`${mainTopic} alternative viewpoint different perspective`);
         searchQueries.push(`${mainTopic} opposing opinion counter argument`);
@@ -118,8 +120,8 @@ Provide the output as a JSON object with the following keys: "core_subject" (str
         console.log("Tavily search queries:", searchQueries);
 
         // Perform multiple Tavily searches to get diverse results
-        let allArticles = [];
-        
+        let allArticles: any[] = [];
+
         for (const query of searchQueries.slice(0, 2)) { // Limit to 2 searches to avoid rate limits
             try {
                 const tavilyResponse = await fetch(TAVILY_API_URL, {
@@ -135,8 +137,8 @@ Provide the output as a JSON object with the following keys: "core_subject" (str
                         include_answer: false,
                         max_results: 5,
                         include_domains: [
-                            "bbc.com", "cnn.com", "reuters.com", "apnews.com", 
-                            "npr.org", "politico.com", "wsj.com", "nytimes.com", 
+                            "bbc.com", "cnn.com", "reuters.com", "apnews.com",
+                            "npr.org", "politico.com", "wsj.com", "nytimes.com",
                             "washingtonpost.com", "foxnews.com", "theguardian.com",
                             "usatoday.com", "abcnews.go.com", "cbsnews.com", "nbcnews.com"
                         ],
@@ -156,16 +158,20 @@ Provide the output as a JSON object with the following keys: "core_subject" (str
 
                 if (tavilyResult.results && Array.isArray(tavilyResult.results)) {
                     const articlesFromQuery = tavilyResult.results
-                        .filter(result => {
+                        .filter((result: { url: string | URL; }) => {
                             // Filter out articles from the original domain
                             try {
                                 const resultDomain = new URL(result.url).hostname.replace('www.', '');
                                 return resultDomain !== originalDomain;
-                            } catch (e) {
+                            } catch (errorFiltering) { // CHANGE 2: Renamed 'e' to 'errorFiltering' for clarity/use
+                                // The variable 'errorFiltering' is used within this catch block for logging if needed,
+                                // but we're returning false directly here, so ESLint might still complain if not used explicitly.
+                                // It's better to explicitly ignore if not used, or use it.
+                                console.warn("Error parsing URL for filtering:", result.url, errorFiltering); // Example of using it
                                 return false;
                             }
                         })
-                        .map(result => ({
+                        .map((result: { title: any; url: string | URL; published_date: any; content: string; score: any; }) => ({
                             title: result.title || 'No title',
                             url: result.url,
                             pubDate: result.published_date || new Date().toISOString(),
@@ -176,7 +182,8 @@ Provide the output as a JSON object with the following keys: "core_subject" (str
                                 domain: (() => {
                                     try {
                                         return new URL(result.url).hostname.replace('www.', '');
-                                    } catch (e) {
+                                    } catch (errorDomain) { // CHANGE 3: Renamed 'e' to 'errorDomain'
+                                        console.warn("Error extracting domain from URL:", result.url, errorDomain);
                                         return 'Unknown Domain';
                                     }
                                 })(),
@@ -184,7 +191,8 @@ Provide the output as a JSON object with the following keys: "core_subject" (str
                                     try {
                                         const domain = new URL(result.url).hostname.replace('www.', '');
                                         return domain.split('.')[0].charAt(0).toUpperCase() + domain.split('.')[0].slice(1);
-                                    } catch (e) {
+                                    } catch (errorName) { // CHANGE 4: Renamed 'e' to 'errorName'
+                                        console.warn("Error extracting source name from URL:", result.url, errorName);
                                         return 'Unknown Source';
                                     }
                                 })()
@@ -197,8 +205,8 @@ Provide the output as a JSON object with the following keys: "core_subject" (str
 
                 // Small delay between requests to be respectful
                 await new Promise(resolve => setTimeout(resolve, 100));
-                
-            } catch (error) {
+
+            } catch (error) { // This 'error' is used in console.error, so it's fine.
                 console.error(`Error with Tavily search for query "${query}":`, error);
                 continue;
             }
@@ -206,7 +214,7 @@ Provide the output as a JSON object with the following keys: "core_subject" (str
 
         // Remove duplicates and sort by relevance score
         const uniqueArticles = allArticles
-            .filter((article, index, self) => 
+            .filter((article, index, self) =>
                 index === self.findIndex(a => a.url === article.url)
             )
             .sort((a, b) => (b.tavilyScore || 0) - (a.tavilyScore || 0))
@@ -224,10 +232,10 @@ Provide the output as a JSON object with the following keys: "core_subject" (str
                 opposingKeywords: opposingKeywords,
                 message: "No opposing viewpoint articles found for this topic.",
                 processingTime: Date.now() - startTime
-            }), { 
-                headers: { 
-                    ...corsHeaders, 
-                    'Content-Type': 'application/json' 
+            }), {
+                headers: {
+                    ...corsHeaders,
+                    'Content-Type': 'application/json'
                 }
             });
         }
@@ -240,26 +248,26 @@ Provide the output as a JSON object with the following keys: "core_subject" (str
             opposingKeywords: opposingKeywords,
             totalArticlesFound: allArticles.length,
             processingTime: Date.now() - startTime
-        }), { 
-            headers: { 
-                ...corsHeaders, 
-                'Content-Type': 'application/json' 
+        }), {
+            headers: {
+                ...corsHeaders,
+                'Content-Type': 'application/json'
             }
         });
 
-    } catch (error) {
+    } catch (error) { // This 'error' is used in console.error and to extract errorMessage.
         console.error('Pivot endpoint error:', error);
         const errorMessage = error instanceof Error ? error.message : 'An unexpected error occurred';
-        
+
         return new NextResponse(JSON.stringify({
             success: false,
             error: errorMessage,
             processingTime: Date.now() - startTime
-        }), { 
-            status: 500, 
-            headers: { 
-                ...corsHeaders, 
-                'Content-Type': 'application/json' 
+        }), {
+            status: 500,
+            headers: {
+                ...corsHeaders,
+                'Content-Type': 'application/json'
             }
         });
     }
