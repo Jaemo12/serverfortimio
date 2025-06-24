@@ -26,6 +26,28 @@ interface RequestBody {
     url: string;     // The URL of the original article
 }
 
+interface TavilyResult {
+    title?: string;
+    url: string;
+    published_date?: string;
+    content?: string;
+    score?: number;
+}
+
+interface ProcessedArticle {
+    title: string;
+    url: string;
+    pubDate: string;
+    authorsByline: null;
+    imageUrl: null;
+    description: string;
+    source: {
+        domain: string;
+        name: string;
+    };
+    tavilyScore: number;
+}
+
 export async function POST(req: Request) {
     const startTime = Date.now();
 
@@ -120,7 +142,7 @@ Provide the output as a JSON object with the following keys: "core_subject" (str
         console.log("Tavily search queries:", searchQueries);
 
         // Perform multiple Tavily searches to get diverse results
-        let allArticles: any[] = [];
+        let allArticles: ProcessedArticle[] = [];
 
         for (const query of searchQueries.slice(0, 2)) { // Limit to 2 searches to avoid rate limits
             try {
@@ -158,7 +180,7 @@ Provide the output as a JSON object with the following keys: "core_subject" (str
 
                 if (tavilyResult.results && Array.isArray(tavilyResult.results)) {
                     const articlesFromQuery = tavilyResult.results
-                        .filter((result: { url: string | URL; }) => {
+                        .filter((result: TavilyResult) => {
                             // Filter out articles from the original domain
                             try {
                                 const resultDomain = new URL(result.url).hostname.replace('www.', '');
@@ -171,7 +193,7 @@ Provide the output as a JSON object with the following keys: "core_subject" (str
                                 return false;
                             }
                         })
-                        .map((result: { title: any; url: string | URL; published_date: any; content: string; score: any; }) => ({
+                        .map((result: TavilyResult): ProcessedArticle => ({
                             title: result.title || 'No title',
                             url: result.url,
                             pubDate: result.published_date || new Date().toISOString(),
