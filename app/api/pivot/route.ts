@@ -1,15 +1,14 @@
 import { NextResponse } from 'next/server';
 
 export const config = {
-  runtime: 'edge',
-}
+    runtime: 'edge',
+};
 
-// Access all necessary API keys from environment variables
-const PERPLEXITY_API_KEY = process.env.PERPLEXITY_API_KEY;
 const CLAUDE_API_KEY = process.env.CLAUDE_API_KEY;
-
-const PERPLEXITY_API_URL = 'https://api.perplexity.ai/chat/completions';
 const CLAUDE_API_URL = 'https://api.anthropic.com/v1/messages';
+
+const TAVILY_API_KEY = process.env.TAVILY_API_KEY;
+const TAVILY_API_URL = 'https://api.tavily.com/search';
 
 const corsHeaders = {
     'Access-Control-Allow-Origin': '*',
@@ -23,110 +22,245 @@ export async function OPTIONS() {
 }
 
 interface RequestBody {
-  content?: string;
-  url?: string;
+    content: string; // The clean_text of the original article
+    url: string;     // The URL of the original article
 }
 
 export async function POST(req: Request) {
-  const startTime = Date.now();
-  
-  try {
-    const { content: url }: RequestBody = await req.json();
+    const startTime = Date.now();
 
-    if (!url || !url.trim()) {
-      throw new Error('URL (sent as content) is required');
+    try {
+        const { content: originalArticleContent, url: originalArticleUrl }: RequestBody = await req.json();
+
+        if (!originalArticleUrl || !originalArticleUrl.trim()) {
+            throw new Error('Original article URL is required');
+        }
+        if (!originalArticleContent || originalArticleContent.trim().length === 0) {
+            throw new Error('Original article content is required for analysis.');
+        }
+
+        if (!TAVILY_API_KEY || !CLAUDE_API_KEY) {
+            throw new Error('An API key for Tavily or Claude is not configured on the server.');
+        }
+
+        // --- STEP 1: Use Claude to extract the main topic & generate opposing keywords ---
+        const analysisPrompt = `You are an expert article analyzer. Your task is to identify the core subject of an article and then generate keywords that represent opposing viewpoints for a news search.
+
+Analyze the following article content:
+${originalArticleContent.substring(0, 4000)}
+
+Based on this, identify:
+1. The core subject of the article (as a concise phrase, max 10 words). This will be the main search term.
+2. Generate 3-5 *short, commonly used* keywords or phrases that capture a *direct opposing viewpoint* or a strong counter-argument to the article's core subject/stance. These should be terms that a journalist or commentator with an opposite view might use.
+
+Provide the output as a JSON object with the following keys: "core_subject" (string) and "opposing_terms" (array of strings). Your response MUST be valid JSON and contain ONLY the JSON object. Do not include any other text, preamble, or markdown formatting (e.g., no \`\`\`json).`;
+
+        const analysisResponse = await fetch(CLAUDE_API_URL, {
+            method: 'POST',
+            headers: {
+                'x-api-key': CLAUDE_API_KEY,
+                'anthropic-version': '2023-06-01',
+                'content-type': 'application/json'
+            },
+            body: JSON.stringify({
+                model: "claude-3-haiku-20240307",
+                max_tokens: 500,
+                messages: [{ role: "user", content: analysisPrompt }],
+                temperature: 0.1,
+            }),
+        });
+
+        if (!analysisResponse.ok) {
+            const errorText = await analysisResponse.text();
+            console.error('Claude API error response:', errorText);
+            throw new Error(`Claude analysis step failed with status ${analysisResponse.status}: ${errorText}`);
+        }
+
+        const data = await analysisResponse.json();
+        const rawJsonResult = data.content[0].text;
+
+        let parsedAnalysisData;
+        try {
+            parsedAnalysisData = JSON.parse(rawJsonResult);
+        } catch (parseError) {
+            console.error("Failed to parse Claude's raw JSON output:", rawJsonResult, parseError);
+            throw new Error("Claude returned unparseable JSON for analysis. Raw response: " + rawJsonResult.substring(0, 200));
+        }
+
+        const { core_subject: mainTopic, opposing_terms: opposingKeywords } = parsedAnalysisData;
+
+        if (!mainTopic) {
+            throw new Error("Could not extract main topic from Claude's analysis.");
+        }
+        if (!opposingKeywords || !Array.isArray(opposingKeywords) || opposingKeywords.length === 0) {
+            console.warn("Claude did not return valid opposing keywords. Proceeding with topic only.");
+        }
+
+        console.log("Extracted Main Topic (Core Subject):", mainTopic);
+        console.log("Suggested Opposing Keywords:", opposingKeywords);
+
+        // --- STEP 2: Use Tavily AI to search for opposing viewpoints ---
+        const originalDomain = new URL(originalArticleUrl).hostname.replace('www.', '');
+        
+        // Create search queries for Tavily
+        let searchQueries = [];
+        
+        // Primary search with opposing terms
+        if (opposingKeywords && opposingKeywords.length > 0) {
+            searchQueries.push(`${mainTopic} ${opposingKeywords.slice(0, 2).join(' ')}`);
+            searchQueries.push(`${mainTopic} criticism debate controversy`);
+        }
+        
+        // Alternative perspective search
+        searchQueries.push(`${mainTopic} alternative viewpoint different perspective`);
+        searchQueries.push(`${mainTopic} opposing opinion counter argument`);
+
+        console.log("Tavily search queries:", searchQueries);
+
+        // Perform multiple Tavily searches to get diverse results
+        let allArticles = [];
+        
+        for (const query of searchQueries.slice(0, 2)) { // Limit to 2 searches to avoid rate limits
+            try {
+                const tavilyResponse = await fetch(TAVILY_API_URL, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        api_key: TAVILY_API_KEY,
+                        query: query,
+                        search_depth: "basic", // or "advanced" for more thorough search
+                        include_images: false,
+                        include_answer: false,
+                        max_results: 5,
+                        include_domains: [
+                            "bbc.com", "cnn.com", "reuters.com", "apnews.com", 
+                            "npr.org", "politico.com", "wsj.com", "nytimes.com", 
+                            "washingtonpost.com", "foxnews.com", "theguardian.com",
+                            "usatoday.com", "abcnews.go.com", "cbsnews.com", "nbcnews.com"
+                        ],
+                        exclude_domains: [originalDomain], // Exclude the original article's domain
+                        include_raw_content: false // Set to true if you need full content
+                    })
+                });
+
+                if (!tavilyResponse.ok) {
+                    const errorText = await tavilyResponse.text();
+                    console.error(`Tavily API error for query "${query}":`, errorText);
+                    continue; // Skip this query and try the next one
+                }
+
+                const tavilyResult = await tavilyResponse.json();
+                console.log(`Tavily results for query "${query}":`, tavilyResult);
+
+                if (tavilyResult.results && Array.isArray(tavilyResult.results)) {
+                    const articlesFromQuery = tavilyResult.results
+                        .filter(result => {
+                            // Filter out articles from the original domain
+                            try {
+                                const resultDomain = new URL(result.url).hostname.replace('www.', '');
+                                return resultDomain !== originalDomain;
+                            } catch (e) {
+                                return false;
+                            }
+                        })
+                        .map(result => ({
+                            title: result.title || 'No title',
+                            url: result.url,
+                            pubDate: result.published_date || new Date().toISOString(),
+                            authorsByline: null,
+                            imageUrl: null,
+                            description: result.content ? result.content.substring(0, 200) + '...' : '',
+                            source: {
+                                domain: (() => {
+                                    try {
+                                        return new URL(result.url).hostname.replace('www.', '');
+                                    } catch (e) {
+                                        return 'Unknown Domain';
+                                    }
+                                })(),
+                                name: (() => {
+                                    try {
+                                        const domain = new URL(result.url).hostname.replace('www.', '');
+                                        return domain.split('.')[0].charAt(0).toUpperCase() + domain.split('.')[0].slice(1);
+                                    } catch (e) {
+                                        return 'Unknown Source';
+                                    }
+                                })()
+                            },
+                            tavilyScore: result.score || 0 // Tavily's relevance score
+                        }));
+
+                    allArticles = allArticles.concat(articlesFromQuery);
+                }
+
+                // Small delay between requests to be respectful
+                await new Promise(resolve => setTimeout(resolve, 100));
+                
+            } catch (error) {
+                console.error(`Error with Tavily search for query "${query}":`, error);
+                continue;
+            }
+        }
+
+        // Remove duplicates and sort by relevance score
+        const uniqueArticles = allArticles
+            .filter((article, index, self) => 
+                index === self.findIndex(a => a.url === article.url)
+            )
+            .sort((a, b) => (b.tavilyScore || 0) - (a.tavilyScore || 0))
+            .slice(0, 4); // Limit to top 4 articles
+
+        console.log(`Found ${uniqueArticles.length} unique relevant articles from Tavily`);
+
+        // If no articles found, provide a fallback
+        if (uniqueArticles.length === 0) {
+            return new NextResponse(JSON.stringify({
+                success: true,
+                result: [],
+                searchQuery: searchQueries.join(' | '),
+                mainTopic: mainTopic,
+                opposingKeywords: opposingKeywords,
+                message: "No opposing viewpoint articles found for this topic.",
+                processingTime: Date.now() - startTime
+            }), { 
+                headers: { 
+                    ...corsHeaders, 
+                    'Content-Type': 'application/json' 
+                }
+            });
+        }
+
+        return new NextResponse(JSON.stringify({
+            success: true,
+            result: uniqueArticles,
+            searchQuery: searchQueries.join(' | '),
+            mainTopic: mainTopic,
+            opposingKeywords: opposingKeywords,
+            totalArticlesFound: allArticles.length,
+            processingTime: Date.now() - startTime
+        }), { 
+            headers: { 
+                ...corsHeaders, 
+                'Content-Type': 'application/json' 
+            }
+        });
+
+    } catch (error) {
+        console.error('Pivot endpoint error:', error);
+        const errorMessage = error instanceof Error ? error.message : 'An unexpected error occurred';
+        
+        return new NextResponse(JSON.stringify({
+            success: false,
+            error: errorMessage,
+            processingTime: Date.now() - startTime
+        }), { 
+            status: 500, 
+            headers: { 
+                ...corsHeaders, 
+                'Content-Type': 'application/json' 
+            }
+        });
     }
-
-    if (!PERPLEXITY_API_KEY || !CLAUDE_API_KEY) {
-        throw new Error('An API key for Perplexity or Claude is not configured on the server.');
-    }
-    
-    // --- STEP 1: Using the model name you provided ---
-    const searchPrompt = `Please find 3-4 articles with opposing viewpoints to the article at this URL: ${url}. For each one, just list the title and the full URL on a new line.`;
-    
-    const searchResponse = await fetch(PERPLEXITY_API_URL, {
-      method: 'POST',
-      headers: { 
-        'Authorization': `Bearer ${PERPLEXITY_API_KEY}`, 
-        'accept': 'application/json', 
-        'content-type': 'application/json' 
-      },
-      body: JSON.stringify({
-        model: "sonar-reasoning-pro", // Using the model name you requested
-        messages: [{ role: "user", content: searchPrompt }],
-      }),
-    });
-
-    if (!searchResponse.ok) {
-        const errorText = await searchResponse.text();
-        throw new Error(`Search step (Perplexity) failed with status ${searchResponse.status}: ${errorText}`);
-    }
-    const searchData = await searchResponse.json();
-    const plainTextListOfArticles = searchData.choices[0].message.content;
-
-    // --- STEP 2: Formatting the response with Claude ---
-    const formatPrompt = `You are a data formatting expert. Your only job is to extract information from the provided text and convert it into a perfect, clean JSON array. Each object in the array must have two keys: "title" (a string) and "url" (a string).
-
-EXAMPLE:
-INPUT TEXT:
-Some Title 1
-https://www.example.com/article1
-Another Title 2
-https://www.example.com/article2
-
-DESIRED JSON OUTPUT:
-[
-  {"title": "Some Title 1", "url": "https://www.example.com/article1"},
-  {"title": "Another Title 2", "url": "https://www.example.com/article2"}
-]
-
-Now, perform this exact task on the following text. Do not add any commentary or explanation. Only output the JSON.
-
-REAL TEXT:
-${plainTextListOfArticles}`;
-
-    const formatResponse = await fetch(CLAUDE_API_URL, {
-        method: 'POST',
-        headers: {
-            'x-api-key': CLAUDE_API_KEY,
-            'anthropic-version': '2023-06-01',
-            'content-type': 'application/json'
-        },
-        body: JSON.stringify({
-            model: "claude-3-haiku-20240307",
-            max_tokens: 2048,
-            messages: [{ role: "user", content: formatPrompt }],
-            temperature: 0.0,
-        }),
-    });
-    
-    if (!formatResponse.ok) {
-        const errorText = await formatResponse.text();
-        throw new Error(`Formatting step (Claude) failed with status ${formatResponse.status}: ${errorText}`);
-    }
-    const formatData = await formatResponse.json();
-    const rawJsonResult = formatData.content[0].text;
-    
-    const jsonMatch = rawJsonResult.match(/(\[[\s\S]*\]|\{[\s\S]*\})/);
-    if (!jsonMatch) {
-      throw new Error("The formatting AI returned data in an unexpected format.");
-    }
-    
-    const finalJsonString = jsonMatch[0];
-
-    return new NextResponse(JSON.stringify({
-      success: true,
-      result: finalJsonString,
-      processingTime: Date.now() - startTime
-    }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' }});
-
-  } catch (error) {
-    console.error('Pivot endpoint error:', error);
-    const errorMessage = error instanceof Error ? error.message : 'An unexpected error occurred';
-    return new NextResponse(JSON.stringify({
-      success: false,
-      error: errorMessage,
-      processingTime: Date.now() - startTime
-    }), { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' }});
-  }
 }
