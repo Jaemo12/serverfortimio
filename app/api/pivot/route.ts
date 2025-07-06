@@ -52,6 +52,17 @@ interface NewsAPIResult {
     };
 }
 
+interface GNewsResult {
+    title: string;
+    url: string;
+    description: string;
+    image?: string;
+    publishedAt: string;
+    source: {
+        name: string;
+    };
+}
+
 interface ProcessedArticle {
     title: string;
     url: string;
@@ -72,15 +83,6 @@ async function searchWithBrave(query: string, originalDomain: string): Promise<P
     }
 
     try {
-        const response = await fetch('https://api.search.brave.com/res/v1/news/search', {
-            method: 'GET',
-            headers: {
-                'X-Subscription-Token': BRAVE_API_KEY,
-                'Accept': 'application/json',
-            },
-            // Add query parameters as URL params
-        });
-
         // Construct URL with search parameters
         const url = new URL('https://api.search.brave.com/res/v1/news/search');
         url.searchParams.append('q', query);
@@ -256,7 +258,7 @@ async function searchWithGNews(query: string, originalDomain: string): Promise<P
         }
 
         return data.articles
-            .filter((article: any) => {
+            .filter((article: GNewsResult) => {
                 try {
                     const resultDomain = new URL(article.url).hostname.replace('www.', '');
                     return resultDomain !== originalDomain;
@@ -264,7 +266,7 @@ async function searchWithGNews(query: string, originalDomain: string): Promise<P
                     return false;
                 }
             })
-            .map((article: any): ProcessedArticle => {
+            .map((article: GNewsResult): ProcessedArticle => {
                 const domain = (() => {
                     try {
                         return new URL(article.url).hostname.replace('www.', '');
