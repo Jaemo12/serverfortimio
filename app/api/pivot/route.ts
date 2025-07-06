@@ -7,8 +7,10 @@ export const config = {
 const CLAUDE_API_KEY = process.env.CLAUDE_API_KEY;
 const CLAUDE_API_URL = 'https://api.anthropic.com/v1/messages';
 
-const TAVILY_API_KEY = process.env.TAVILY_API_KEY;
-const TAVILY_API_URL = 'https://api.tavily.com/search';
+// Free APIs - Add these to your environment variables
+const BRAVE_API_KEY = process.env.BRAVE_API_KEY; // Free: 2000 queries/month
+const NEWSAPI_KEY = process.env.NEWSAPI_KEY; // Free: 500/month (backup)
+const GNEWS_API_KEY = process.env.GNEWS_API_KEY; // Free: 100/day (backup)
 
 const corsHeaders = {
     'Access-Control-Allow-Origin': '*',
@@ -22,20 +24,32 @@ export async function OPTIONS() {
 }
 
 interface RequestBody {
-    content: string; // The clean_text of the original article
-    url: string;     // The URL of the original article
+    content: string;
+    url: string;
 }
 
-interface TavilyResult {
-    title?: string;
+interface BraveNewsResult {
+    title: string;
     url: string;
-    published_date?: string;
-    content?: string;
-    score?: number;
-    // Add image fields that Tavily might return
-    image?: string;
-    thumbnail?: string;
-    images?: string[];
+    description: string;
+    age?: string;
+    thumbnail?: {
+        src: string;
+    };
+    meta_url?: {
+        netloc: string;
+    };
+}
+
+interface NewsAPIResult {
+    title: string;
+    url: string;
+    description: string;
+    urlToImage?: string;
+    publishedAt: string;
+    source: {
+        name: string;
+    };
 }
 
 interface ProcessedArticle {
@@ -49,7 +63,242 @@ interface ProcessedArticle {
         domain: string;
         name: string;
     };
-    tavilyScore: number;
+    score: number;
+}
+
+async function searchWithBrave(query: string, originalDomain: string): Promise<ProcessedArticle[]> {
+    if (!BRAVE_API_KEY) {
+        throw new Error('Brave API key not configured');
+    }
+
+    try {
+        const response = await fetch('https://api.search.brave.com/res/v1/news/search', {
+            method: 'GET',
+            headers: {
+                'X-Subscription-Token': BRAVE_API_KEY,
+                'Accept': 'application/json',
+            },
+            // Add query parameters as URL params
+        });
+
+        // Construct URL with search parameters
+        const url = new URL('https://api.search.brave.com/res/v1/news/search');
+        url.searchParams.append('q', query);
+        url.searchParams.append('count', '10');
+        url.searchParams.append('freshness', 'pw'); // Past week
+        url.searchParams.append('text_decorations', 'false');
+
+        const braveResponse = await fetch(url.toString(), {
+            method: 'GET',
+            headers: {
+                'X-Subscription-Token': BRAVE_API_KEY,
+                'Accept': 'application/json',
+            },
+        });
+
+        if (!braveResponse.ok) {
+            throw new Error(`Brave API error: ${braveResponse.status}`);
+        }
+
+        const data = await braveResponse.json();
+        console.log('Brave search results:', data);
+
+        if (!data.results || !Array.isArray(data.results)) {
+            return [];
+        }
+
+        return data.results
+            .filter((result: BraveNewsResult) => {
+                try {
+                    const resultDomain = new URL(result.url).hostname.replace('www.', '');
+                    return resultDomain !== originalDomain;
+                } catch {
+                    return false;
+                }
+            })
+            .map((result: BraveNewsResult): ProcessedArticle => {
+                const domain = (() => {
+                    try {
+                        return new URL(result.url).hostname.replace('www.', '');
+                    } catch {
+                        return result.meta_url?.netloc || 'unknown.com';
+                    }
+                })();
+
+                const sourceName = domain.split('.')[0].charAt(0).toUpperCase() + domain.split('.')[0].slice(1);
+
+                // Get image URL
+                let imageUrl: string | null = null;
+                if (result.thumbnail?.src) {
+                    imageUrl = result.thumbnail.src;
+                } else {
+                    // Fallback to Microlink
+                    imageUrl = `https://api.microlink.io/?url=${encodeURIComponent(result.url)}&meta=false&embed=image.url`;
+                }
+
+                return {
+                    title: result.title || 'No title',
+                    url: result.url,
+                    pubDate: result.age || new Date().toISOString(),
+                    authorsByline: null,
+                    imageUrl: imageUrl,
+                    description: result.description || '',
+                    source: {
+                        domain: domain,
+                        name: sourceName
+                    },
+                    score: 0.8 // High score for Brave results
+                };
+            });
+
+    } catch (error) {
+        console.error('Brave search failed:', error);
+        return [];
+    }
+}
+
+async function searchWithNewsAPI(query: string, originalDomain: string): Promise<ProcessedArticle[]> {
+    if (!NEWSAPI_KEY) {
+        console.log('NewsAPI key not available, skipping');
+        return [];
+    }
+
+    try {
+        const url = new URL('https://newsapi.org/v2/everything');
+        url.searchParams.append('q', query);
+        url.searchParams.append('sortBy', 'relevancy');
+        url.searchParams.append('language', 'en');
+        url.searchParams.append('pageSize', '5');
+        url.searchParams.append('apiKey', NEWSAPI_KEY);
+
+        const response = await fetch(url.toString());
+        
+        if (!response.ok) {
+            throw new Error(`NewsAPI error: ${response.status}`);
+        }
+
+        const data = await response.json();
+
+        if (!data.articles || !Array.isArray(data.articles)) {
+            return [];
+        }
+
+        return data.articles
+            .filter((article: NewsAPIResult) => {
+                try {
+                    const resultDomain = new URL(article.url).hostname.replace('www.', '');
+                    return resultDomain !== originalDomain;
+                } catch {
+                    return false;
+                }
+            })
+            .map((article: NewsAPIResult): ProcessedArticle => {
+                const domain = (() => {
+                    try {
+                        return new URL(article.url).hostname.replace('www.', '');
+                    } catch {
+                        return 'unknown.com';
+                    }
+                })();
+
+                let imageUrl: string | null = null;
+                if (article.urlToImage) {
+                    imageUrl = article.urlToImage;
+                } else {
+                    imageUrl = `https://api.microlink.io/?url=${encodeURIComponent(article.url)}&meta=false&embed=image.url`;
+                }
+
+                return {
+                    title: article.title || 'No title',
+                    url: article.url,
+                    pubDate: article.publishedAt || new Date().toISOString(),
+                    authorsByline: null,
+                    imageUrl: imageUrl,
+                    description: article.description || '',
+                    source: {
+                        domain: domain,
+                        name: article.source.name || domain
+                    },
+                    score: 0.6 // Lower score for NewsAPI
+                };
+            });
+
+    } catch (error) {
+        console.error('NewsAPI search failed:', error);
+        return [];
+    }
+}
+
+async function searchWithGNews(query: string, originalDomain: string): Promise<ProcessedArticle[]> {
+    if (!GNEWS_API_KEY) {
+        console.log('GNews API key not available, skipping');
+        return [];
+    }
+
+    try {
+        const url = new URL('https://gnews.io/api/v4/search');
+        url.searchParams.append('q', query);
+        url.searchParams.append('lang', 'en');
+        url.searchParams.append('country', 'us');
+        url.searchParams.append('max', '5');
+        url.searchParams.append('apikey', GNEWS_API_KEY);
+
+        const response = await fetch(url.toString());
+        
+        if (!response.ok) {
+            throw new Error(`GNews API error: ${response.status}`);
+        }
+
+        const data = await response.json();
+
+        if (!data.articles || !Array.isArray(data.articles)) {
+            return [];
+        }
+
+        return data.articles
+            .filter((article: any) => {
+                try {
+                    const resultDomain = new URL(article.url).hostname.replace('www.', '');
+                    return resultDomain !== originalDomain;
+                } catch {
+                    return false;
+                }
+            })
+            .map((article: any): ProcessedArticle => {
+                const domain = (() => {
+                    try {
+                        return new URL(article.url).hostname.replace('www.', '');
+                    } catch {
+                        return 'unknown.com';
+                    }
+                })();
+
+                let imageUrl: string | null = null;
+                if (article.image) {
+                    imageUrl = article.image;
+                } else {
+                    imageUrl = `https://api.microlink.io/?url=${encodeURIComponent(article.url)}&meta=false&embed=image.url`;
+                }
+
+                return {
+                    title: article.title || 'No title',
+                    url: article.url,
+                    pubDate: article.publishedAt || new Date().toISOString(),
+                    authorsByline: null,
+                    imageUrl: imageUrl,
+                    description: article.description || '',
+                    source: {
+                        domain: domain,
+                        name: article.source.name || domain
+                    },
+                    score: 0.7 // Medium score for GNews
+                };
+            });
+
+    } catch (error) {
+        console.error('GNews search failed:', error);
+        return [];
+    }
 }
 
 export async function POST(req: Request) {
@@ -65,8 +314,8 @@ export async function POST(req: Request) {
             throw new Error('Original article content is required for analysis.');
         }
 
-        if (!TAVILY_API_KEY || !CLAUDE_API_KEY) {
-            throw new Error('An API key for Tavily or Claude is not configured on the server.');
+        if (!CLAUDE_API_KEY) {
+            throw new Error('Claude API key is not configured on the server.');
         }
 
         // --- STEP 1: Use Claude to extract the main topic & generate opposing keywords ---
@@ -118,141 +367,48 @@ Provide the output as a JSON object with the following keys: "core_subject" (str
         if (!mainTopic) {
             throw new Error("Could not extract main topic from Claude's analysis.");
         }
-        if (!opposingKeywords || !Array.isArray(opposingKeywords) || opposingKeywords.length === 0) {
-            console.warn("Claude did not return valid opposing keywords. Proceeding with topic only.");
-        }
 
         console.log("Extracted Main Topic (Core Subject):", mainTopic);
         console.log("Suggested Opposing Keywords:", opposingKeywords);
 
-        // --- STEP 2: Use Tavily AI to search for opposing viewpoints ---
+        // --- STEP 2: Search using multiple free APIs ---
         const originalDomain = new URL(originalArticleUrl).hostname.replace('www.', '');
 
-        // Create search queries for Tavily
+        // Create search queries
         const searchQueries = [];
-
-        // Primary search with opposing terms
         if (opposingKeywords && opposingKeywords.length > 0) {
             searchQueries.push(`${mainTopic} ${opposingKeywords.slice(0, 2).join(' ')}`);
             searchQueries.push(`${mainTopic} criticism debate controversy`);
         }
-
-        // Alternative perspective search
         searchQueries.push(`${mainTopic} alternative viewpoint different perspective`);
-        searchQueries.push(`${mainTopic} opposing opinion counter argument`);
 
-        console.log("Tavily search queries:", searchQueries);
+        console.log("Search queries:", searchQueries);
 
-        // Perform multiple Tavily searches to get diverse results
+        // Search with multiple APIs in parallel
         let allArticles: ProcessedArticle[] = [];
 
-        for (const query of searchQueries.slice(0, 2)) { // Limit to 2 searches to avoid rate limits
+        for (const query of searchQueries.slice(0, 2)) {
             try {
-                const tavilyResponse = await fetch(TAVILY_API_URL, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({
-                        api_key: TAVILY_API_KEY,
-                        query: query,
-                        search_depth: "basic",
-                        include_images: true, // ← Enable images from Tavily
-                        include_answer: false,
-                        max_results: 5,
-                        include_domains: [
-                            "bbc.com", "cnn.com", "reuters.com", "apnews.com",
-                            "npr.org", "politico.com", "wsj.com", "nytimes.com",
-                            "washingtonpost.com", "foxnews.com", "theguardian.com",
-                            "usatoday.com", "abcnews.go.com", "cbsnews.com", "nbcnews.com"
-                        ],
-                        exclude_domains: [originalDomain], // Exclude the original article's domain
-                        include_raw_content: false
-                    })
-                });
+                // Try Brave first (best free API)
+                const braveResults = await searchWithBrave(query, originalDomain);
+                allArticles = allArticles.concat(braveResults);
 
-                if (!tavilyResponse.ok) {
-                    const errorText = await tavilyResponse.text();
-                    console.error(`Tavily API error for query "${query}":`, errorText);
-                    continue; // Skip this query and try the next one
+                // If Brave doesn't return enough results, try backups
+                if (braveResults.length < 3) {
+                    const newsApiResults = await searchWithNewsAPI(query, originalDomain);
+                    allArticles = allArticles.concat(newsApiResults);
+
+                    if (braveResults.length + newsApiResults.length < 3) {
+                        const gNewsResults = await searchWithGNews(query, originalDomain);
+                        allArticles = allArticles.concat(gNewsResults);
+                    }
                 }
 
-                const tavilyResult = await tavilyResponse.json();
-                console.log(`Tavily results for query "${query}":`, tavilyResult);
-
-                if (tavilyResult.results && Array.isArray(tavilyResult.results)) {
-                    const articlesFromQuery = tavilyResult.results
-                        .filter((result: TavilyResult) => {
-                            // Filter out articles from the original domain
-                            try {
-                                const resultDomain = new URL(result.url).hostname.replace('www.', '');
-                                return resultDomain !== originalDomain;
-                            } catch (errorFiltering) {
-                                console.warn("Error parsing URL for filtering:", result.url, errorFiltering);
-                                return false;
-                            }
-                        })
-                        .map((result: TavilyResult): ProcessedArticle => {
-                            // Extract domain for source info
-                            const domain = (() => {
-                                try {
-                                    return new URL(result.url).hostname.replace('www.', '');
-                                } catch (errorDomain) {
-                                    console.warn("Error extracting domain from URL:", result.url, errorDomain);
-                                    return 'unknown.com';
-                                }
-                            })();
-
-                            // Generate source name from domain
-                            const sourceName = (() => {
-                                try {
-                                    const domainParts = domain.split('.');
-                                    const baseName = domainParts[0];
-                                    return baseName.charAt(0).toUpperCase() + baseName.slice(1);
-                                } catch (errorName) {
-                                    console.warn("Error extracting source name from domain:", domain, errorName);
-                                    return 'Unknown Source';
-                                }
-                            })();
-
-                            // Determine the best image URL
-                            let imageUrl: string | null = null;
-                            
-                            // Try different image sources from Tavily
-                            if (result.image) {
-                                imageUrl = result.image;
-                            } else if (result.thumbnail) {
-                                imageUrl = result.thumbnail;
-                            } else if (result.images && result.images.length > 0) {
-                                imageUrl = result.images[0];
-                            } else {
-                                // Fallback to Microlink API for auto-generated thumbnails
-                                imageUrl = `https://api.microlink.io/?url=${encodeURIComponent(result.url)}&meta=false&embed=image.url`;
-                            }
-
-                            return {
-                                title: result.title || 'No title',
-                                url: result.url,
-                                pubDate: result.published_date || new Date().toISOString(),
-                                authorsByline: null, // Tavily doesn't typically provide author info
-                                imageUrl: imageUrl,
-                                description: result.content ? result.content.substring(0, 200) + '...' : '',
-                                source: {
-                                    domain: domain,
-                                    name: sourceName
-                                },
-                                tavilyScore: result.score || 0
-                            };
-                        });
-
-                    allArticles = allArticles.concat(articlesFromQuery);
-                }
-
-                // Small delay between requests to be respectful
-                await new Promise(resolve => setTimeout(resolve, 100));
+                // Small delay between queries
+                await new Promise(resolve => setTimeout(resolve, 200));
 
             } catch (error) {
-                console.error(`Error with Tavily search for query "${query}":`, error);
+                console.error(`Error with search for query "${query}":`, error);
                 continue;
             }
         }
@@ -262,10 +418,10 @@ Provide the output as a JSON object with the following keys: "core_subject" (str
             .filter((article, index, self) =>
                 index === self.findIndex(a => a.url === article.url)
             )
-            .sort((a, b) => (b.tavilyScore || 0) - (a.tavilyScore || 0))
+            .sort((a, b) => (b.score || 0) - (a.score || 0))
             .slice(0, 4); // Limit to top 4 articles
 
-        console.log(`Found ${uniqueArticles.length} unique relevant articles from Tavily`);
+        console.log(`Found ${uniqueArticles.length} unique relevant articles`);
         console.log(`Articles with images: ${uniqueArticles.filter(a => a.imageUrl).length}`);
 
         // If no articles found, provide a fallback
