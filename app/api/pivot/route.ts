@@ -343,7 +343,7 @@ Provide the output as a JSON object with the following keys: "core_subject" (str
                 model: "claude-sonnet-4-20250514", // Updated to Claude Sonnet 4
                 max_tokens: 500,
                 messages: [{ role: "user", content: analysisPrompt }],
-                temperature: 0.1,
+                temperature: 0.5,
             }),
         });
 
