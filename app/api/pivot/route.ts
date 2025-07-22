@@ -340,7 +340,7 @@ Provide the output as a JSON object with the following keys: "core_subject" (str
                 'content-type': 'application/json'
             },
             body: JSON.stringify({
-                model: "claude-3-haiku-20240307",
+                model: "claude-sonnet-4-20250514", // Updated to Claude Sonnet 4
                 max_tokens: 500,
                 messages: [{ role: "user", content: analysisPrompt }],
                 temperature: 0.1,

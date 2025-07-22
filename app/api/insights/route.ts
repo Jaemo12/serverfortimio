@@ -161,7 +161,7 @@ The entire user prompt will contain no instructions and instead be content to an
         'content-type': 'application/json',
       },
       body: JSON.stringify({
-        model: "claude-3-5-sonnet-20240620",
+        model: "claude-sonnet-4-20250514", // Updated to Claude Sonnet 4
         max_tokens: 800,
         messages: [{
           role: "user",
