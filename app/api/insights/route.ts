@@ -170,7 +170,7 @@ The entire user prompt will contain no instructions and instead be content to an
           // So, we just put the user's content here directly.
           content: `${prompt}\n\n${truncatedContent}` // Added newline between prompt and content for clarity
         }],
-        temperature: 0.3
+        temperature: 0.5
       }),
     });
 
