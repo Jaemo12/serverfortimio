@@ -1,0 +1,68 @@
+{
+   "action": {
+      "default_icon": "TIMIOCircle128.png",
+      "default_popup": "popup.html"
+   },
+   "background": {
+      "service_worker": "backgroundSimplified.bundle.js"
+   },
+   "content_scripts": [
+      {
+         "css": [
+            "content.styles.css"
+         ],
+         "js": [
+            "lottie.min.js",
+            "lottie-manager.js",
+            "content.bundle.js"
+         ],
+         "matches": [
+            "<all_urls>"
+         ],
+         "run_at": "document_end"
+      }
+   ],
+   "content_security_policy": {
+      "extension_pages": "script-src 'self'; object-src 'self'; connect-src 'self'  ws://localhost:3000  https://identitytoolkit.googleapis.com https://*.firebaseapp.com https://*.googleapis.com https://serverfortimio-delta.vercel.app;"
+   },
+   "description": "Article insights extension",
+   "host_permissions": [
+      "https://serverfortimio-delta.vercel.app/*"
+   ],
+   "icons": {
+      "128": "TIMIOCircle128.png",
+      "16": "TIMIOCircle128.png",
+      "32": "TIMIOCircle128.png",
+      "48": "TIMIOCircle128.png"
+   },
+   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEArOKTRrlKie0zh/7iXlIRRBmnVhWIo0A/wYV8pLumu3PCDgqIZIzTzdQD7BagF6XbygwWr6U66U3EO3VIiajtmrFHy7bz8LUhLx/bCb7AykUo9qpP9flQWmZCqpwCQa5pXIrF/X9m04VDfbS9bGX4VYtYMk6osE0J73QoR0dYcWh2gLzCvLCEkonVqjxJJ7+Zgk5tcKFE2lwxlUc2OgwNjNkI5mCPLZ+RG4L8bpeEyRH/5TpupsxrDg0XxcTrUdPTkKeCpFFZayinLVKiPVNZKC/tZJvBKUFa8Xh5hZV9AbAbIcEWm2ukoxNNPqY6xPJXbo7ucsKpN9r3VS9qBAwomwIDAQAB",
+   "manifest_version": 3,
+   "name": "TIMIO Chrome - Early Access",
+   "permissions": [
+      "storage",
+      "activeTab",
+      "sidePanel"
+   ],
+   "side_panel": {
+      "default_path": "sidepanel.html"
+   },
+   "update_url": "https://clients2.google.com/service/update2/crx",
+   "version": "1.5.4.2",
+   "web_accessible_resources": [
+      {
+         "matches": [
+            "<all_urls>"
+         ],
+         "resources": [
+            "assets/animations/torch.json",
+            "assets/animations/pivot.json",
+            "Torch_Icon.png",
+            "Pivot_Icon.png",
+            "summarize-icon.png",
+            "assets/img/TIMIOLogoClear.png",
+            "assets/img/CustomTorchIcon.png",
+            "assets/img/CustomPivotIcon.png"
+         ]
+      }
+   ]
+}

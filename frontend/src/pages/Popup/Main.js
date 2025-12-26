@@ -1,0 +1,279 @@
+import React, { useState, useEffect, useRef } from 'react';
+import { useHistory } from 'react-router-dom';
+import { app } from './firebase.js'; // Assuming firebase is still used elsewhere
+import Lottie from 'react-lottie';
+import torchAnimationData from '../../assets/animations/torch.json';
+import pivotAnimationData from '../../assets/animations/pivot.json';
+import './main.css';
+
+const Main = ({ setIsAuthenticated }) => {
+  const [email, setEmail] = useState('user@example.com'); // Default email for no-auth
+  const [showToolTip, setShowToolTip] = useState(false);
+  const [isMounted, setIsMounted] = useState(true);
+  const history = useHistory();
+
+  // State to manage the floating menu visibility
+  const [isFloatingMenuVisible, setIsFloatingMenuVisible] = useState(true);
+
+  // Use refs to safely reference animations
+  const torchAnimationRef = useRef(null);
+  const pivotAnimationRef = useRef(null);
+
+  // Lottie animation options (remain the same)
+  const torchOptions = {
+    loop: true,
+    autoplay: true,
+    animationData: torchAnimationData,
+    rendererSettings: {
+      preserveAspectRatio: 'xMidYMid slice'
+    }
+  };
+
+  const pivotOptions = {
+    loop: true,
+    autoplay: true,
+    animationData: pivotAnimationData,
+    rendererSettings: {
+      preserveAspectRatio: 'xMidYMid slice'
+    }
+  };
+
+  useEffect(() => {
+    setIsMounted(true);
+
+    // Load floating menu visibility setting from chrome.storage.local
+    if (chrome.storage && chrome.storage.local) {
+      chrome.storage.local.get(['isFloatingMenuVisible'], (result) => {
+        const storedVisibility = typeof result.isFloatingMenuVisible !== 'undefined' ? result.isFloatingMenuVisible : true;
+        setIsFloatingMenuVisible(storedVisibility);
+      });
+    }
+
+    // Show tooltip on first visit
+    try {
+      const hasSeenTooltip = localStorage.getItem('hasSeenTooltip');
+      if (!hasSeenTooltip && isMounted) {
+        setShowToolTip(true);
+        localStorage.setItem('hasSeenTooltip', 'true');
+      }
+    } catch (error) {
+      console.log('Error with tooltip:', error);
+    }
+
+    // Cleanup function
+    return () => {
+      setIsMounted(false);
+    };
+  }, [isMounted]); // Dependency array includes isMounted
+
+  // Function to toggle floating menu visibility
+  const toggleFloatingMenuVisibility = () => {
+    const newVisibility = !isFloatingMenuVisible;
+    setIsFloatingMenuVisible(newVisibility);
+
+    // Save the setting to chrome.storage.local
+    if (chrome.storage && chrome.storage.local) {
+      chrome.storage.local.set({ isFloatingMenuVisible: newVisibility }, () => {
+        console.log('Floating menu visibility saved to storage:', newVisibility);
+      });
+    }
+
+    // Send a message to the content script in the active tab
+    if (chrome.tabs && chrome.runtime) {
+      chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+        if (tabs[0] && tabs[0].id) {
+          chrome.tabs.sendMessage(tabs[0].id, {
+            type: 'TOGGLE_FLOATING_MENU',
+            isVisible: newVisibility,
+          }, (response) => {
+            if (chrome.runtime.lastError) {
+              console.warn("Error sending message to content script:", chrome.runtime.lastError.message);
+            } else {
+              console.log('Message sent to content script:', response);
+            }
+          });
+        }
+      });
+    }
+  };
+
+  return (
+    <div className="extension-container">
+      {/* Header */}
+      <header className="extension-header">
+        <h1 className="logo">TIMIO</h1>
+        <div className="header-buttons">
+          {/* Label for the sliding toggle button */}
+          <label className="toggle-label" htmlFor="floating-menu-toggle">
+            Floating Menu:
+            <label className="switch">
+              <input
+                type="checkbox"
+                id="floating-menu-toggle"
+                checked={isFloatingMenuVisible}
+                onChange={toggleFloatingMenuVisibility}
+              />
+              <span className="slider round"></span>
+            </label>
+          </label>
+        </div>
+      </header>
+
+      {/* Main Content */}
+      <main className="extension-main">
+        {/* Welcome Message */}
+        <div className="welcome-message">
+          <h2>Welcome to TIMIO</h2>
+          <p>Your intelligent news analysis AI helping you uncover media bias and different viewpoints.</p>
+        </div>
+
+        {/* Get Started Section with + Icon */}
+        <div className="instruction-box">
+          <div className="instruction-header">
+            <h3 className="get-started-header">Get Started</h3>
+            <div className="step-indicator">Step 1</div>
+          </div>
+          <p className="instruction-text">
+            While reading any news article, click the
+          </p>
+
+          <div className="plus-sign-container">
+            <svg
+              className="plus-sign"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.5"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <line x1="12" y1="5" x2="12" y2="19"></line>
+              <line x1="5" y1="12" x2="19" y2="12"></line>
+            </svg>
+          </div>
+
+          <p className="instruction-text">
+            button at the bottom right corner to access TIMIO's analysis tools
+          </p>
+          <p className="instruction-text" style={{ marginTop: '12px', fontStyle: 'italic', color: '#9ca3af' }}>
+            Tip: The + button is draggable, you can move it anywhere for easier access!
+          </p>
+
+          {showToolTip && (
+            <div className="instruction-tooltip">
+              <span>
+                First time? Try clicking the + icon on any news website to start analyzing with TIMIO's tools!
+              </span>
+
+              <button
+                className="tooltip-close"
+                onClick={() => setShowToolTip(false)}
+              >
+                ×
+              </button>
+            </div>
+          )}
+        </div>
+
+        {/* Individual Tool Showcase */}
+        <div className="tools-showcase">
+          <h3 className="tools-title">Our Analysis Tools</h3>
+
+          <div className="animation-showcase">
+            {/* Torch Tool with Animation */}
+            <div className="animation-item torch">
+              {isMounted && (
+                <Lottie
+                  options={{
+                    ...torchOptions,
+                    rendererSettings: {
+                      preserveAspectRatio: 'xMidYMid meet'
+                    }
+                  }}
+                  height={120}
+                  width={100}
+                  isClickToPauseDisabled={true}
+                  isStopped={false}
+                  isPaused={false}
+                  ref={torchAnimationRef}
+                />
+              )}
+              <span className="tool-name">Torch</span>
+              <p className="tool-description">
+                Detects media bias and credibility issues in any news article
+              </p>
+
+              <div className="tool-details">
+                <div className="tool-detail-item">
+                  <svg className="detail-icon" viewBox="0 0 24 24">
+                    <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z" />
+                  </svg>
+                  <span className="detail-text">Detect political bias and slant</span>
+                </div>
+                <div className="tool-detail-item">
+                  <svg className="detail-icon" viewBox="0 0 24 24">
+                    <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z" />
+                  </svg>
+                  <span className="detail-text">Identify emotional language and framing</span>
+                </div>
+                <div className="tool-detail-item">
+                  <svg className="detail-icon" viewBox="0 0 24 24">
+                    <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z" />
+                  </svg>
+                  <span className="detail-text">Evaluate source credibility</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Pivot Tool with Animation */}
+            <div className="animation-item pivot">
+              {isMounted && (
+                <Lottie
+                  options={pivotOptions}
+                  height={80}
+                  width={80}
+                  isStopped={false}
+                  isPaused={false}
+                  ref={pivotAnimationRef}
+                />
+              )}
+              <span className="tool-name">Pivot</span>
+              <p className="tool-description">
+                Discover alternative perspectives & broaden your understanding
+              </p>
+
+              <div className="tool-details">
+                <div className="tool-detail-item">
+                  <svg className="detail-icon" viewBox="0 0 24 24">
+                    <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z" />
+                  </svg>
+                  <span className="detail-text">Find articles with different views</span>
+                </div>
+                <div className="tool-detail-item">
+                  <svg className="detail-icon" viewBox="0 0 24 24">
+                    <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z" />
+                  </svg>
+                  <span className="detail-text">Compare coverage across outlets</span>
+                </div>
+                <div className="tool-detail-item">
+                  <svg className="detail-icon" viewBox="0 0 24 24">
+                    <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z" />
+                  </svg>
+                  <span className="detail-text">Explore the full context of any story</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Footer Navigation */}
+        <footer className="extension-footer">
+          <nav className="footer-nav">
+          </nav>
+        </footer>
+      </main>
+    </div>
+  );
+};
+
+export default Main;
